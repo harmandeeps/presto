@@ -17,6 +17,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.prestosql.spi.PrestoException;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.shims.HadoopShims;
@@ -27,6 +28,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkState;
@@ -129,6 +133,8 @@ public class AcidInfo
         private final Map<Long, List<OriginalFileInfo>> bucketIdToOriginalFileInfoMap = new HashMap<>();
         private final Path partitionLocation;
 
+        private Function<FileStatus, Long> bucketIdProvider;
+
         public Builder(Path partitionLocation)
         {
             this.deleteDeltaLocations = Optional.empty();
@@ -137,35 +143,52 @@ public class AcidInfo
             this.partitionLocation = requireNonNull(partitionLocation, "partitionLocation is null");
         }
 
-        public Builder(Configuration configuration, Path partitionLocation,
-                List<HadoopShims.HdfsFileStatusWithId> originalFileLocations)
+        public Builder addOriginalFiles(Configuration configuration, List<HadoopShims.HdfsFileStatusWithId> originalFileLocations)
         {
-            this(partitionLocation);
-            long index = 0;
+            List<FileStatus> originalFiles = originalFileLocations.stream().map(HadoopShims.HdfsFileStatusWithId::getFileStatus).collect(Collectors.toList());
+            boolean needIndexBasedBucketId = originalFiles.stream().map(FileStatus::getPath)
+                    .map(path -> {
+                        try {
+                            return AcidUtils.parseBaseOrDeltaBucketFilename(path, configuration).getBucketId();
+                        }
+                        catch (IOException e) {
+                            throw new PrestoException(HIVE_UNKNOWN_ERROR, e);
+                        }
+                    })
+                    .anyMatch(bucketId -> bucketId == -1);
+
+            bucketIdProvider = fileStatus -> {
+                if (needIndexBasedBucketId) {
+                    return (long) originalFiles.indexOf(fileStatus);
+                }
+                else {
+                    try {
+                        return (long) AcidUtils.parseBaseOrDeltaBucketFilename(fileStatus.getPath(), configuration).getBucketId();
+                    }
+                    catch (IOException e) {
+                        throw new PrestoException(HIVE_UNKNOWN_ERROR, e);
+                    }
+                }
+            };
+
             for (HadoopShims.HdfsFileStatusWithId hdfsFileStatusWithId : originalFileLocations) {
                 Path originalFilePath = hdfsFileStatusWithId.getFileStatus().getPath();
                 long originalFileLength = hdfsFileStatusWithId.getFileStatus().getLen();
-                try {
-                    long bucketId = AcidUtils.parseBaseOrDeltaBucketFilename(originalFilePath, configuration).getBucketId();
-                    bucketId = (bucketId == -1) ? index : bucketId;
+                long bucketId = bucketIdProvider.apply(hdfsFileStatusWithId.getFileStatus());
 
-                    List<OriginalFileInfo> originalFileInfoList = bucketIdToOriginalFileInfoMap.getOrDefault(bucketId, new ArrayList<>());
-                    originalFileInfoList.add(new OriginalFileInfo(originalFilePath.getName(), originalFileLength));
-                    bucketIdToOriginalFileInfoMap.put(bucketId, originalFileInfoList);
-                    index++;
-                }
-                catch (IOException e) {
-                    throw new PrestoException(HIVE_UNKNOWN_ERROR, String.format("Error in fetching bucket ID of original file: %s", originalFilePath), e);
-                }
+                List<OriginalFileInfo> originalFileInfoList = bucketIdToOriginalFileInfoMap.getOrDefault(bucketId, new ArrayList<>());
+                originalFileInfoList.add(new OriginalFileInfo(originalFilePath.getName(), originalFileLength));
+                bucketIdToOriginalFileInfoMap.put(bucketId, originalFileInfoList);
             }
+            return this;
         }
 
-        public Builder deleteDeltaLocations(Path path, List<AcidUtils.ParsedDelta> currentDirectories)
+        public Builder deleteDeltaLocations(List<AcidUtils.ParsedDelta> currentDirectories)
         {
             if (currentDirectories == null || currentDirectories.isEmpty()) {
                 return this;
             }
-            DeleteDeltaLocations.Builder deleteDeltaLocationsBuilder = new DeleteDeltaLocations.Builder(path);
+            DeleteDeltaLocations.Builder deleteDeltaLocationsBuilder = new DeleteDeltaLocations.Builder(partitionLocation);
             for (AcidUtils.ParsedDelta delta : currentDirectories) {
                 if (delta.isDeleteDelta()) {
                     deleteDeltaLocationsBuilder.addDeleteDelta(delta.getPath(), delta.getMinWriteId(),
@@ -203,9 +226,16 @@ public class AcidInfo
             return bucketId;
         }
 
-        public Builder bucketId(Optional<Long> bucketId)
+        public Builder bucketId(long bucketId)
         {
-            this.bucketId = bucketId;
+            this.bucketId = Optional.of(bucketId);
+            return this;
+        }
+
+        public Builder setBucketId(FileStatus fileStatus)
+        {
+            requireNonNull(bucketIdProvider, "bucketIdProvider is null");
+            this.bucketId = Optional.of(bucketIdProvider.apply(fileStatus));
             return this;
         }
 

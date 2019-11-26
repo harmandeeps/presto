@@ -102,6 +102,19 @@ public class InternalHiveSplitFactory
         return createInternalHiveSplit(status, OptionalInt.of(bucketNumber), false, Optional.empty());
     }
 
+    public Optional<InternalHiveSplit> createInternalHiveSplit(FileStatus status, BlockLocation[] blockLocations, Optional<AcidInfo> acidInfo)
+    {
+        return createInternalHiveSplit(
+                status.getPath(),
+                blockLocations,
+                0,
+                status.getLen(),
+                status.getLen(),
+                OptionalInt.empty(),
+                true,
+                acidInfo);
+    }
+
     private Optional<InternalHiveSplit> createInternalHiveSplit(LocatedFileStatus status, OptionalInt bucketNumber, boolean splittable, Optional<AcidInfo> acidInfo)
     {
         splittable = splittable && isSplittable(inputFormat, fileSystem, status.getPath());

@@ -68,6 +68,7 @@ import java.util.Properties;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Function;
 import java.util.function.IntPredicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -412,75 +413,95 @@ public class BackgroundHiveSplitLoader
                     true);
 
             if (AcidUtils.isInsertOnlyTable(table.getParameters())) {
-                addDeltaFiles(fs, splitFactory, splittable, directory, null);
-                addBaseFile(fs, splitFactory, splittable, directory, null);
-                addOriginalFiles(configuration, fs, splitFactory, splittable, directory.getOriginalFiles(), null);
+                generateDeltaDirectorySplits(fs, splitFactory, splittable, directory, Optional.empty());
+                generateBaseDirectorySplits(fs, splitFactory, splittable, directory, Optional.empty());
+                generateOriginalFilesSplits(fs, splitFactory, directory.getOriginalFiles(), Optional.empty());
             }
             else {
-                AcidInfo.Builder acidInfoBuilder = new AcidInfo.Builder(configuration, path, directory.getOriginalFiles());
                 // create Delete Deltas registry
-                acidInfoBuilder.deleteDeltaLocations(path, directory.getCurrentDirectories());
+                AcidInfo.Builder acidInfoBuilder = new AcidInfo.Builder(path);
+                acidInfoBuilder.deleteDeltaLocations(directory.getCurrentDirectories());
 
-                addDeltaFiles(fs, splitFactory, splittable, directory, acidInfoBuilder);
-                addBaseFile(fs, splitFactory, splittable, directory, acidInfoBuilder);
-                addOriginalFiles(configuration, fs, splitFactory, splittable, directory.getOriginalFiles(), acidInfoBuilder);
+                generateDeltaDirectorySplits(fs, splitFactory, splittable, directory, Optional.of(acidInfoBuilder));
+                generateBaseDirectorySplits(fs, splitFactory, splittable, directory, Optional.of(acidInfoBuilder));
+
+                acidInfoBuilder.addOriginalFiles(configuration, directory.getOriginalFiles());
+                generateOriginalFilesSplits(fs, splitFactory, directory.getOriginalFiles(), Optional.of(acidInfoBuilder));
             }
         }
         return COMPLETED_FUTURE;
     }
 
-    private void addBaseFile(FileSystem fs, InternalHiveSplitFactory splitFactory, boolean splittable, AcidUtils.Directory directory, AcidInfo.Builder acidInfoBuilder)
+    private void generateBaseDirectorySplits(FileSystem fs, InternalHiveSplitFactory splitFactory, boolean splittable, AcidUtils.Directory directory, Optional<AcidInfo.Builder> acidInfoBuilder)
     {
         if (directory.getBaseDirectory() != null) {
-            Optional<AcidInfo> acidInfo = Optional.empty();
-            if (acidInfoBuilder != null) {
-                acidInfo = Optional.of(acidInfoBuilder.build());
-            }
+            Optional<AcidInfo> acidInfo = acidInfoBuilder.map(AcidInfo.Builder::build);
             fileIterators.addLast(createInternalHiveSplitIterator(directory.getBaseDirectory(), fs, splitFactory,
                     splittable, acidInfo));
         }
     }
 
-    private void addDeltaFiles(FileSystem fs, InternalHiveSplitFactory splitFactory, boolean splittable, AcidUtils.Directory directory, AcidInfo.Builder acidInfoBuilder)
+    private void generateDeltaDirectorySplits(FileSystem fs, InternalHiveSplitFactory splitFactory, boolean splittable, AcidUtils.Directory directory, Optional<AcidInfo.Builder> acidInfoBuilder)
     {
         if (directory.getCurrentDirectories() == null) {
             return;
         }
         for (AcidUtils.ParsedDelta delta : directory.getCurrentDirectories()) {
             if (!delta.isDeleteDelta()) {
-                Optional<AcidInfo> acidInfo = Optional.empty();
-                if (acidInfoBuilder != null) {
-                    acidInfo = Optional.of(acidInfoBuilder.build());
-                }
+                Optional<AcidInfo> acidInfo = acidInfoBuilder.map(AcidInfo.Builder::build);
                 fileIterators.addLast(createInternalHiveSplitIterator(delta.getPath(), fs, splitFactory, splittable,
                         acidInfo));
             }
         }
     }
 
-    private void addOriginalFiles(Configuration configuration, FileSystem fs, InternalHiveSplitFactory splitFactory, boolean splittable,
-            List<HadoopShims.HdfsFileStatusWithId> originalFileLocations, AcidInfo.Builder acidInfoBuilder)
+    private void generateOriginalFilesSplits(FileSystem fs, InternalHiveSplitFactory splitFactory,
+            List<HadoopShims.HdfsFileStatusWithId> originalFileLocations, Optional<AcidInfo.Builder> acidInfoBuilder)
     {
         if (originalFileLocations == null || originalFileLocations.isEmpty()) {
             return;
         }
-        long index = 0;
-        for (HadoopShims.HdfsFileStatusWithId hdfsFileStatusWithId : originalFileLocations) {
-            Path originalFilePath = hdfsFileStatusWithId.getFileStatus().getPath();
-            Optional<AcidInfo> acidInfo = Optional.empty();
-            if (acidInfoBuilder != null) {
-                try {
-                    long bucketId = AcidUtils.parseBaseOrDeltaBucketFilename(originalFilePath, configuration).getBucketId();
-                    bucketId = (bucketId == -1) ? index : bucketId;
-                    acidInfo = Optional.of(acidInfoBuilder.bucketId(Optional.of(bucketId)).buildWithRequiredOriginalFiles());
-                    index++;
-                }
-                catch (IOException e) {
-                    throw new PrestoException(HIVE_UNKNOWN_ERROR, String.format("Error in fetching bucket ID of original file: %s", originalFilePath), e);
-                }
-            }
-            fileIterators.addLast(createInternalHiveSplitIterator(originalFilePath, fs, splitFactory, splittable, acidInfo));
+
+        // INSERT ONLY Tables case
+        if (!acidInfoBuilder.isPresent()) {
+            addOriginalFilesForFullAcid(fs,
+                    originalFileLocations,
+                    splitFactory,
+                    fileStatus -> Optional.empty());
+            return;
         }
+
+        addOriginalFilesForFullAcid(fs,
+                originalFileLocations,
+                splitFactory,
+                fileStatus -> Optional.of(
+                        acidInfoBuilder.get()
+                                .setBucketId(fileStatus)
+                                .buildWithRequiredOriginalFiles()));
+    }
+
+    private void addOriginalFilesForFullAcid(
+            FileSystem fs,
+            List<HadoopShims.HdfsFileStatusWithId> originalFileLocations,
+            InternalHiveSplitFactory splitFactory,
+            Function<FileStatus, Optional<AcidInfo>> acidInfoGenerator)
+    {
+        fileIterators.addLast(
+                originalFileLocations.stream()
+                        .map(file -> file.getFileStatus())
+                        .map(fileStatus -> {
+                            try {
+                                return splitFactory.createInternalHiveSplit(fileStatus,
+                                        hdfsEnvironment.doAs(hdfsContext.getIdentity().getUser(), () -> fs.getFileBlockLocations(fileStatus.getPath(), 0, fileStatus.getLen())),
+                                        acidInfoGenerator.apply(fileStatus));
+                            }
+                            catch (IOException e) {
+                                throw new PrestoException(HIVE_BAD_DATA, e);
+                            }
+                        })
+                        .filter(Optional::isPresent)
+                        .map(Optional::get)
+                        .iterator());
     }
 
     private ListenableFuture<?> addSplitsToSource(InputSplit[] targetSplits, InternalHiveSplitFactory splitFactory)

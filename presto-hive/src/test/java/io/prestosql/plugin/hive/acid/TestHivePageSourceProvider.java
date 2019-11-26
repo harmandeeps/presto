@@ -92,7 +92,7 @@ public class TestHivePageSourceProvider
         HivePageSourceProvider pageSourceProvider = new HivePageSourceProvider(CONFIG, HDFS_ENVIRONMENT, ImmutableSet.of(), ImmutableSet.of(acidOrcPageSourceFactory), TYPE_MANAGER);
 
         Path path = new Path(Thread.currentThread().getContextClassLoader().getResource("nation.tbl").getPath());
-        HiveSplit split = createHiveSplit(Optional.of(new AcidInfo.Builder(path).deleteDeltaLocations(Optional.of(AcidNationRow.getDeletaDeltaLocations())).bucketId(Optional.of(0L)).build()));
+        HiveSplit split = createHiveSplit(Optional.of(new AcidInfo.Builder(path).deleteDeltaLocations(Optional.of(AcidNationRow.getDeletaDeltaLocations())).bucketId(0L).build()));
         HiveTableHandle table = new HiveTableHandle("test", "test", ImmutableMap.of(), ImmutableList.of(), Optional.empty());
         ConnectorPageSource pageSource = pageSourceProvider.createPageSource(new HiveTransactionHandle(), SESSION, split, table, getColumnHandles());
         List<AcidNationRow> rows = readFileCols(pageSource, columnNames, columnTypes, true);
