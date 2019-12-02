@@ -28,7 +28,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -45,12 +44,12 @@ public class AcidInfo
 {
     private final Optional<DeleteDeltaLocations> deleteDeltaLocations;
     private final Optional<OriginalFileLocations> originalFileLocations;
-    private final Optional<Long> bucketId;
+    private final Optional<Integer> bucketId;
 
     @JsonCreator
     public AcidInfo(@JsonProperty("deleteDeltas") Optional<DeleteDeltaLocations> deleteDeltaLocations,
                     @JsonProperty("originalFiles") Optional<OriginalFileLocations> originalFileLocations,
-                    @JsonProperty("bucketId") Optional<Long> bucketId)
+                    @JsonProperty("bucketId") Optional<Integer> bucketId)
     {
         this.deleteDeltaLocations = requireNonNull(deleteDeltaLocations, "deleteDeltaLocations is null");
         this.originalFileLocations = requireNonNull(originalFileLocations, "originalFileLocations is null");
@@ -70,7 +69,7 @@ public class AcidInfo
     }
 
     @JsonProperty
-    public Optional<Long> getBucketId()
+    public Optional<Integer> getBucketId()
     {
         return bucketId;
     }
@@ -129,18 +128,18 @@ public class AcidInfo
     {
         private Optional<DeleteDeltaLocations> deleteDeltaLocations;
         private Optional<OriginalFileLocations> originalFileLocations;
-        private Optional<Long> bucketId;
-        private final Map<Long, List<OriginalFileInfo>> bucketIdToOriginalFileInfoMap = new HashMap<>();
+        private Optional<Integer> bucketId;
+        private final Map<Integer, List<OriginalFileInfo>> bucketIdToOriginalFileInfoMap = new HashMap<>();
         private final Path partitionLocation;
 
-        private Function<FileStatus, Long> bucketIdProvider;
+        private Function<FileStatus, Integer> bucketIdProvider;
 
         public Builder(Path partitionLocation)
         {
+            this.partitionLocation = requireNonNull(partitionLocation, "partitionLocation is null");
             this.deleteDeltaLocations = Optional.empty();
             this.originalFileLocations = Optional.empty();
             this.bucketId = Optional.empty();
-            this.partitionLocation = requireNonNull(partitionLocation, "partitionLocation is null");
         }
 
         public Builder addOriginalFiles(Configuration configuration, List<HadoopShims.HdfsFileStatusWithId> originalFileLocations)
@@ -159,11 +158,11 @@ public class AcidInfo
 
             bucketIdProvider = fileStatus -> {
                 if (needIndexBasedBucketId) {
-                    return (long) originalFiles.indexOf(fileStatus);
+                    return originalFiles.indexOf(fileStatus);
                 }
                 else {
                     try {
-                        return (long) AcidUtils.parseBaseOrDeltaBucketFilename(fileStatus.getPath(), configuration).getBucketId();
+                        return AcidUtils.parseBaseOrDeltaBucketFilename(fileStatus.getPath(), configuration).getBucketId();
                     }
                     catch (IOException e) {
                         throw new PrestoException(HIVE_UNKNOWN_ERROR, e);
@@ -174,7 +173,7 @@ public class AcidInfo
             for (HadoopShims.HdfsFileStatusWithId hdfsFileStatusWithId : originalFileLocations) {
                 Path originalFilePath = hdfsFileStatusWithId.getFileStatus().getPath();
                 long originalFileLength = hdfsFileStatusWithId.getFileStatus().getLen();
-                long bucketId = bucketIdProvider.apply(hdfsFileStatusWithId.getFileStatus());
+                int bucketId = bucketIdProvider.apply(hdfsFileStatusWithId.getFileStatus());
 
                 List<OriginalFileInfo> originalFileInfoList = bucketIdToOriginalFileInfoMap.getOrDefault(bucketId, new ArrayList<>());
                 originalFileInfoList.add(new OriginalFileInfo(originalFilePath.getName(), originalFileLength));
@@ -183,7 +182,13 @@ public class AcidInfo
             return this;
         }
 
-        public Builder deleteDeltaLocations(List<AcidUtils.ParsedDelta> currentDirectories)
+        public Builder addOriginalFiles(Optional<OriginalFileLocations> originalFileLocations)
+        {
+            this.originalFileLocations = originalFileLocations;
+            return this;
+        }
+
+        public Builder addDeleteDeltaLocations(List<AcidUtils.ParsedDelta> currentDirectories)
         {
             if (currentDirectories == null || currentDirectories.isEmpty()) {
                 return this;
@@ -199,7 +204,7 @@ public class AcidInfo
             return this;
         }
 
-        public Builder deleteDeltaLocations(Optional<DeleteDeltaLocations> deleteDeltaLocations)
+        public Builder addDeleteDeltaLocations(Optional<DeleteDeltaLocations> deleteDeltaLocations)
         {
             this.deleteDeltaLocations = deleteDeltaLocations;
             return this;
@@ -210,23 +215,17 @@ public class AcidInfo
             return deleteDeltaLocations;
         }
 
-        public Builder originalFileInfo(Optional<OriginalFileLocations> originalFileLocations)
-        {
-            this.originalFileLocations = originalFileLocations;
-            return this;
-        }
-
         public Optional<OriginalFileLocations> getOriginalFileLocations()
         {
             return originalFileLocations;
         }
 
-        public Optional<Long> getBucketId()
+        public Optional<Integer> getBucketId()
         {
             return bucketId;
         }
 
-        public Builder bucketId(long bucketId)
+        public Builder setBucketId(int bucketId)
         {
             this.bucketId = Optional.of(bucketId);
             return this;

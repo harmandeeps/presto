@@ -420,7 +420,7 @@ public class BackgroundHiveSplitLoader
             else {
                 // create Delete Deltas registry
                 AcidInfo.Builder acidInfoBuilder = new AcidInfo.Builder(path);
-                acidInfoBuilder.deleteDeltaLocations(directory.getCurrentDirectories());
+                acidInfoBuilder.addDeleteDeltaLocations(directory.getCurrentDirectories());
 
                 generateDeltaDirectorySplits(fs, splitFactory, splittable, directory, Optional.of(acidInfoBuilder));
                 generateBaseDirectorySplits(fs, splitFactory, splittable, directory, Optional.of(acidInfoBuilder));

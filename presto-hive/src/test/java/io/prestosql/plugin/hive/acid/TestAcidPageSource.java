@@ -164,7 +164,7 @@ public class TestAcidPageSource
         OriginalFileLocations originalFileLocations = new OriginalFileLocations(tablePath, originalFileInfos);
 
         AcidInfo acidInfo = new AcidInfo(Optional.of(deleteDeltaLocationsBuilder.build()),
-                Optional.of(originalFileLocations), Optional.of(0L));
+                Optional.of(originalFileLocations), Optional.of(0));
         ConnectorPageSource pageSource = AcidPageProcessorProvider.getAcidPageSource(tableName + "/000000_0", columnNames, columnTypes, Optional.of(acidInfo));
         List<AcidNationRow> rows = readFileCols(pageSource, columnNames, columnTypes, true, 24);
 

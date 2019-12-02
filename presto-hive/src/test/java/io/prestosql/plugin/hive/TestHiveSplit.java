@@ -57,8 +57,8 @@ public class TestHiveSplit
         originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo("000001_0", 125));
         OriginalFileLocations originalFileLocations = new OriginalFileLocations("file:///data/fullacid", originalFileInfos);
 
-        acidInfoBuilder.originalFileInfo(Optional.of(originalFileLocations));
-        acidInfoBuilder.deleteDeltaLocations(Optional.of(deleteDeltaLocationsBuilder.build()));
+        acidInfoBuilder.addOriginalFiles(Optional.of(originalFileLocations));
+        acidInfoBuilder.addDeleteDeltaLocations(Optional.of(deleteDeltaLocationsBuilder.build()));
 
         HiveSplit expected = new HiveSplit(
                 "db",

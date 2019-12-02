@@ -152,6 +152,6 @@ public class TestDeletedRowsRegistry
                 HDFS_ENVIRONMENT,
                 CONFIG.getDeleteDeltaCacheSize(),
                 CONFIG.getDeleteDeltaCacheTTL(),
-                Optional.of(new AcidInfo.Builder(inputSplitPath).deleteDeltaLocations(deleteDeltaLocations).bucketId(0L).build()));
+                Optional.of(new AcidInfo.Builder(inputSplitPath).addDeleteDeltaLocations(deleteDeltaLocations).setBucketId(0).build()));
     }
 }
